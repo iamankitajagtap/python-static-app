@@ -213,7 +213,7 @@ pipeline {
 
                             source venv/bin/activate
 
-                            pkill -f 'gunicorn.*app:app' || true
+                            pkill -f '[g]unicorn.*app:app' || true
 
                             nohup gunicorn \
                                 --bind 0.0.0.0:5000 \
