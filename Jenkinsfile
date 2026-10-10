@@ -4,7 +4,7 @@ pipeline {
 
     environment {
 
-        TARGET_IP = '3.94.205.191'
+        TARGET_IP = '54.87.245.169'
 
         CRED_ID = 'ec2-target-key'
 
@@ -21,7 +21,7 @@ pipeline {
                 echo 'Cloning Python application...'
 
                 git branch: 'main',
-                    url: 'https://github.com/YOUR-USERNAME/python-static-site.git'
+                    url: 'https://github.com/iamankitajagtap/python-static-app.git'
 
             }
         }
