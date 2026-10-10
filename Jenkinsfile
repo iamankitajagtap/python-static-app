@@ -1,258 +1,235 @@
-pipeline {
 
+pipeline {
     agent any
 
+    options {
+        skipDefaultCheckout(true)
+    }
+
     environment {
-
         TARGET_IP = '34.207.96.215'
-
-        CRED_ID = 'ec2-target-key'
-
-        APP_DIR = '/home/ec2-user/python-static-site'
-
+        CRED_ID   = 'ec2-target-key'
+        APP_DIR   = '/home/ec2-user/python-static-site'
+        APP_PORT  = '5000'
+        REPO_URL  = 'https://github.com/iamankitajagtap/python-static-app.git'
     }
 
     stages {
 
         stage('Checkout') {
-
             steps {
-
-                echo 'Cloning Python application...'
-
-                git branch: 'main',
-                    url: 'https://github.com/iamankitajagtap/python-static-app.git'
-
+                echo 'Checking out Python application repository...'
+                git branch: 'main', url: "${REPO_URL}"
             }
         }
-
 
         stage('Install Python') {
-
             steps {
-
                 sh '''
-                    sudo yum install -y python3
-
+                    set -e
                     python3 --version
-
-                    pip3 --version
+                    python3 -m pip --version
                 '''
-
             }
         }
-
 
         stage('Create Virtual Environment') {
-
             steps {
-
                 sh '''
-                    rm -rf venv
-
+                    set -e
                     python3 -m venv venv
-
-                    source venv/bin/activate
-
-                    pip install --upgrade pip
+                    ./venv/bin/python -m pip install --upgrade pip
                 '''
-
             }
         }
-
 
         stage('Install Dependencies') {
-
             steps {
-
                 sh '''
-                    source venv/bin/activate
-
-                    pip install -r requirements.txt
+                    set -e
+                    ./venv/bin/pip install -r requirements.txt
+                    ./venv/bin/pip install gunicorn
                 '''
-
             }
         }
 
-
-        stage('Build / Validate') {
-
+        stage('Build and Validate') {
             steps {
-
                 sh '''
-                    source venv/bin/activate
-
-                    python3 -m py_compile app.py
-
-                    echo "Python application validation successful"
+                    set -e
+                    ./venv/bin/python -m py_compile app.py
+                    ./venv/bin/python -c \
+                      "from app import app; print('Flask application imported successfully')"
+                    echo 'Python application validation successful.'
                 '''
-
             }
         }
-
 
         stage('Deploy to Target Server') {
-
             steps {
-
                 withCredentials([
-
                     sshUserPrivateKey(
-
                         credentialsId: "${CRED_ID}",
-
                         keyFileVariable: 'SSH_KEY',
-
                         usernameVariable: 'SSH_USER'
-
                     )
-
                 ]) {
-
                     sh '''
+                        set -e
 
-                        echo "Creating application directory..."
+                        SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o BatchMode=yes"
 
-                        ssh -i $SSH_KEY \
-                            -o StrictHostKeyChecking=no \
-                            $SSH_USER@$TARGET_IP \
-                            "mkdir -p $APP_DIR"
+                        echo 'Creating application directory...'
 
+                        ssh $SSH_OPTS "$SSH_USER@$TARGET_IP" \
+                            "mkdir -p '$APP_DIR'"
 
-                        echo "Copying application to target server..."
+                        echo 'Copying application files...'
 
-                        scp -i $SSH_KEY \
-                            -o StrictHostKeyChecking=no \
-                            -r app.py requirements.txt templates static \
-                            $SSH_USER@$TARGET_IP:$APP_DIR/
+                        scp $SSH_OPTS app.py requirements.txt \
+                            "$SSH_USER@$TARGET_IP:$APP_DIR/"
 
+                        if [ -d templates ]; then
+                            scp $SSH_OPTS -r templates \
+                                "$SSH_USER@$TARGET_IP:$APP_DIR/"
+                        fi
 
-                        echo "Application copied successfully."
+                        if [ -d static ]; then
+                            scp $SSH_OPTS -r static \
+                                "$SSH_USER@$TARGET_IP:$APP_DIR/"
+                        fi
 
+                        echo 'Application files copied successfully.'
                     '''
-
                 }
-
             }
         }
-
 
         stage('Setup Application on Target') {
-
             steps {
-
                 withCredentials([
-
                     sshUserPrivateKey(
-
                         credentialsId: "${CRED_ID}",
-
                         keyFileVariable: 'SSH_KEY',
-
                         usernameVariable: 'SSH_USER'
-
                     )
-
                 ]) {
-
                     sh '''
+                        set -e
 
-                        ssh -i $SSH_KEY \
+                        ssh -i "$SSH_KEY" \
                             -o StrictHostKeyChecking=no \
-                            $SSH_USER@$TARGET_IP "
+                            -o BatchMode=yes \
+                            "$SSH_USER@$TARGET_IP" \
+                            "APP_DIR='$APP_DIR' bash -s" <<'REMOTE_SCRIPT'
 
-                            sudo yum install -y python3
+set -e
 
-                            cd $APP_DIR
+sudo dnf install -y python3
 
-                            python3 -m venv venv
+cd "$APP_DIR"
 
-                            source venv/bin/activate
+python3 -m venv venv
+./venv/bin/python -m pip install --upgrade pip
+./venv/bin/pip install -r requirements.txt
+./venv/bin/pip install gunicorn
 
-                            pip install --upgrade pip
+echo 'Target environment setup completed.'
 
-                            pip install -r requirements.txt
-
-                            echo 'Python dependencies installed.'
-
-                        "
-
+REMOTE_SCRIPT
                     '''
-
                 }
-
             }
         }
-
 
         stage('Start Application') {
-
             steps {
-
                 withCredentials([
-
                     sshUserPrivateKey(
-
                         credentialsId: "${CRED_ID}",
-
                         keyFileVariable: 'SSH_KEY',
-
                         usernameVariable: 'SSH_USER'
-
                     )
-
                 ]) {
-
                     sh '''
+                        set -e
 
-                        ssh -i $SSH_KEY \
+                        ssh -i "$SSH_KEY" \
                             -o StrictHostKeyChecking=no \
-                            $SSH_USER@$TARGET_IP "
+                            -o BatchMode=yes \
+                            "$SSH_USER@$TARGET_IP" \
+                            "APP_DIR='$APP_DIR' APP_PORT='$APP_PORT' bash -s" <<'REMOTE_SCRIPT'
 
-                            cd $APP_DIR
+set -e
 
-                            source venv/bin/activate
+cd "$APP_DIR"
 
-                            pkill -f '[g]unicorn.*app:app' || true
+# Stop the previous Gunicorn process if its PID file exists.
+if [ -f gunicorn.pid ]; then
+    OLD_PID=$(cat gunicorn.pid)
 
-                            nohup gunicorn \
-                                --bind 0.0.0.0:5000 \
-                                --workers 2 \
-                                app:app \
-                                > app.log 2>&1 &
+    if [[ "$OLD_PID" =~ ^[0-9]+$ ]] &&
+       kill -0 "$OLD_PID" 2>/dev/null; then
+        kill "$OLD_PID" || true
 
-                            echo 'Application started successfully.'
+        for i in {1..10}; do
+            kill -0 "$OLD_PID" 2>/dev/null || break
+            sleep 1
+        done
+    fi
 
-                        "
+    rm -f gunicorn.pid
+fi
 
+# Start Gunicorn in the background.
+nohup ./venv/bin/gunicorn \
+    --bind "0.0.0.0:$APP_PORT" \
+    --workers 2 \
+    --pid gunicorn.pid \
+    app:app \
+    >> app.log 2>&1 < /dev/null &
+
+# Wait for the Flask application to respond.
+HEALTHY=0
+
+for i in {1..15}; do
+    if curl -fsS "http://127.0.0.1:$APP_PORT/" -o /dev/null; then
+        HEALTHY=1
+        echo 'Application health check passed.'
+        break
+    fi
+
+    sleep 2
+done
+
+if [ "$HEALTHY" -ne 1 ]; then
+    echo 'Application health check failed.'
+    tail -50 app.log || true
+    exit 1
+fi
+
+echo 'Gunicorn application is running.'
+tail -20 app.log
+
+REMOTE_SCRIPT
                     '''
-
                 }
-
             }
         }
-
     }
 
-
     post {
-
         success {
-
-            echo '======================================'
-
-            echo ' Python Application Deployed Successfully '
-
-            echo '======================================'
-
+            echo 'Python application deployed successfully.'
+            echo "Application URL: http://${TARGET_IP}:${APP_PORT}"
         }
 
         failure {
-
-            echo 'Python application deployment failed.'
-
+            echo 'Python application deployment failed. Check Console Output.'
         }
 
+        always {
+            echo 'Jenkins pipeline execution completed.'
+        }
     }
-
 }
